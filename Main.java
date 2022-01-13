@@ -1,81 +1,89 @@
 package application;
 	
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.Socket;
-import java.util.Iterator;
-import java.util.Vector;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
 import javafx.geometry.Insets;
 import javafx.stage.Stage;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
-import javafx.scene.text.Font;
-
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 
 public class Main extends Application {
 	
-	public static ExecutorService threadPool;
-	public static Vector<Client> clients = new Vector<Client>();
+	Socket socket;
+	TextArea textArea;
 	
-	ServerSocket serverSocket;
-	
-	public void startServer(String IP, int port) {
-		try {
-			serverSocket = new ServerSocket();
-			serverSocket.bind(new InetSocketAddress(IP, port));
-		} catch (Exception e) {
-			e.printStackTrace();
-			if(!serverSocket.isClosed()) {
-				stopServer();
-			}
-			return;
-		}
-		
-		Runnable thread = new Runnable() {
-			@Override
+	public void startClient(String IP, int port) {
+		Thread thread = new Thread() {
 			public void run() {
-				while(true) {
-					try {Socket socket = serverSocket.accept();
-					clients.add(new Client(socket));
-					System.out.println("클라이언트 접속" + socket.getRemoteSocketAddress()+ ": " + Thread.currentThread().getName());
+				try {
+					socket = new Socket(IP, port);
+					receive();
 				} catch (Exception e) {
-					if(!serverSocket.isClosed()) {
-						stopServer();
-					}
-					break;
+					if(!socket.isClosed()) {
+						stopClient();
+						System.out.println("서버 접속 실패");
+						Platform.exit();
 					}
 				}
 			}
 		};
-		threadPool = Executors.newCachedThreadPool();
-		threadPool.submit(thread);
+		thread.start();
 	}
 	
-	public void stopServer() {
+	public void stopClient() {
 		try {
-			Iterator<Client> iterator = clients.iterator();
-			while(iterator.hasNext()) {
-				Client client = iterator.next();
-				client.socket.close();
-				iterator.remove();
+			if(socket != null && !socket.isClosed()) {
+				socket.close();
 			}
-			if(serverSocket != null && !serverSocket.isClosed()) {
-				serverSocket.close();
-			}
-			if(threadPool != null && !threadPool.isShutdown()) {
-				threadPool.shutdown();
-			}
-			
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
+	}
+	
+	public void receive() {
+		while(true) {
+			try {
+				InputStream in = socket.getInputStream();
+				byte[] buffer = new byte[512];
+				int length = in.read(buffer);
+				if(length == -1) throw new IOException();
+				String message = new String(buffer, 0, length, "UTF-8");
+				Platform.runLater(()->{
+					textArea.appendText(message);
+				});
+			} catch (Exception e) {
+				stopClient();
+				break;
+			}
+		}
+	}
+	
+	public void send(String message) {
+		Thread thread = new Thread() {
+			public void run() {
+				try {
+					OutputStream out = socket.getOutputStream();
+					byte[] buffer = message.getBytes("UTF-8");
+					out.write(buffer);
+					out.flush();
+				} catch (Exception e) {
+					stopClient();
+				}
+			}
+		};
+		thread.start();
 	}
 	
 	@Override
@@ -83,44 +91,92 @@ public class Main extends Application {
 		BorderPane root = new BorderPane();
 		root.setPadding(new Insets(5));
 		
-		TextArea textArea = new TextArea();
-		textArea.setEditable(false);
-		textArea.setFont(new Font("나눔고딕",15));
-		root.setCenter(textArea);
+		HBox hbox = new HBox();
+		hbox.setSpacing(5);
 		
-		Button toggleButton = new Button("시작하기");
-		toggleButton.setMaxWidth(Double.MAX_VALUE);
-		BorderPane.setMargin(toggleButton, new Insets(1, 0, 0, 0));
-		root.setBottom(toggleButton);
+		TextField userName = new TextField();
+		//userName.setPrefWidth(150);
+		userName.setPrefWidth(360);
+		userName.setPromptText("닉네임을 입력하세요.");
+		HBox.setHgrow(userName, Priority.ALWAYS);
 		
-		String IP = "127.0.0.1";
-		int port = 7777;
+		TextField IPText = new TextField("127.0.0.1");
+		IPText.setVisible(false);
+		TextField portText = new TextField("7777");
+		portText.setVisible(false);
+		//portText.setPrefWidth(80);
 		
-		toggleButton.setOnAction(event -> {
-			if(toggleButton.getText().equals("시작하기")) {
-				startServer(IP, port);
-				Platform.runLater(()-> {
-					String message = String.format("서버 시작\n", IP, port);
-					textArea.appendText(message);
-					toggleButton.setText("종료하기");
+		TextField input = new TextField();
+		input.setPrefWidth(Double.MAX_VALUE);
+		input.setDisable(true);
+		input.setPromptText("내용을 입력하세요.");
+		
+		input.setOnAction(event-> {
+			send(userName.getText() + ": " + input.getText() + "\n");
+			input.setText("");
+			input.requestFocus();
+		});
+		
+		Button sendButton = new Button("보내기");
+		sendButton.setDisable(true);
+		
+		sendButton.setOnAction(event-> {
+			send(userName.getText() + ": " + input.getText() + "\n");
+			input.setText("");
+			input.requestFocus();
+		});
+		
+		Button connectionButton = new Button("접속");
+		connectionButton.setOnAction(event -> {
+			if(connectionButton.getText().equals("접속")) {
+				int port = 7777;
+				try {
+					port = Integer.parseInt(portText.getText());
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+				startClient(IPText.getText(),port);
+				Platform.runLater(() -> {
+					textArea.appendText("채팅방 접속\n");
 				});
+				connectionButton.setText("종료");
+				input.setDisable(false);
+				sendButton.setDisable(false);
+				input.requestFocus();
 			} else {
-				stopServer();
+				stopClient();
 				Platform.runLater(()-> {
-					String message = String.format("서버 종료\n", IP, port);
-					textArea.appendText(message);
-					toggleButton.setText("시작하기");			
+					textArea.appendText("채팅방 퇴장\n");
 				});
+				connectionButton.setText("접속");
+				input.setDisable(true);
+				sendButton.setDisable(true);
 			}
 		});
 		
+		connectionButton.setPrefWidth(80);
+		hbox.getChildren().addAll(userName, connectionButton);
+		root.setTop(hbox);
+		
+		textArea = new TextArea();
+		textArea.setEditable(false);
+		root.setCenter(textArea);
+		
+		BorderPane pane = new BorderPane();
+		//pane.setLeft(connectionButton);
+		pane.setCenter(input);
+		pane.setRight(sendButton);
+		
+		root.setBottom(pane);
 		Scene scene = new Scene(root, 400, 400);
-		primaryStage.setTitle("채팅 서버");
-		primaryStage.setOnCloseRequest(event -> stopServer());
+		primaryStage.setTitle("채팅 클라이언트");
 		primaryStage.setScene(scene);
+		primaryStage.setOnCloseRequest(event -> stopClient());
 		primaryStage.show();
+		
+		connectionButton.requestFocus();
 	}
-	
+		
 	public static void main(String[] args) {
 		launch(args);
 	}
